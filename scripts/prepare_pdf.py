@@ -84,6 +84,8 @@ if __name__ == "__main__":
 
     pages = extract_all_pdfs_from_folder(folder)
 
+    os.makedirs("data", exist_ok=True)
+
     with open("data/pages.json", "w", encoding="utf-8") as f:
         json.dump(pages, f, ensure_ascii=False, indent=2)
 
