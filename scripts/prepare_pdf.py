@@ -1,6 +1,7 @@
 import fitz
 import re
 import os
+import json
 from typing import List, Dict
 
 
@@ -78,13 +79,12 @@ def extract_all_pdfs_from_folder(folder_path: str) -> List[Dict]:
 
 
 if __name__ == "__main__":
-    
+
     folder = "documents"
-    
+
     pages = extract_all_pdfs_from_folder(folder)
-    
-    print("\nПример страницы:")
-    print(pages[10])
-    
-    print("\nПример текста:")
-    print(pages[10]["text"][:300])
+
+    with open("data/pages.json", "w", encoding="utf-8") as f:
+        json.dump(pages, f, ensure_ascii=False, indent=2)
+
+    print("Pages saved to data/pages.json")
