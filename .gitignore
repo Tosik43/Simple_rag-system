@@ -48,8 +48,7 @@ vector_store/
 vectorstores/
 
 # Vector DB
-chroma/
-chroma_db/
+qdrant_data/
 faiss_index/
 *.faiss
 *.index
