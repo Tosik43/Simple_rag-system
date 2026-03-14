@@ -23,7 +23,7 @@ TOP_K_RERANK = 5
 app = FastAPI(title="RAG API")
 
 print("Loading embedding model...")
-EMBED_MODEL_NAME = SentenceTransformer(EMBED_MODEL_NAME)
+EMBED_MODEL = SentenceTransformer(EMBED_MODEL_NAME)
 
 print("Connecting Qdrant...")
 qdrant = QdrantClient(url=QDRANT_URL)
@@ -40,9 +40,10 @@ class AnswerResponse(BaseModel):
 
 
 def retrieve(query: str):
-    query_vector = EMBED_MODEL_NAME.encode(
+    query_vector = EMBED_MODEL.encode(
         query,
-        normalize_embeddings=True
+        normalize_embeddings=True,
+        convert_to_numpy=True
     )
 
     results = qdrant.query_points(
