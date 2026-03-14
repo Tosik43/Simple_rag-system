@@ -3,11 +3,13 @@ import json
 import numpy as np
 import torch
 
+from dotenv import load_dotenv
 from typing import List, Dict
 from sentence_transformers import SentenceTransformer
 
+load_dotenv()
 
-MODEL_NAME = "BAAI/bge-m3"
+EMBED_MODEL_NAME = os.getenv("EMBED_MODEL_NAME")
 
 CHUNKS_FILE = "data/chunks.json"
 EMBEDDINGS_FILE = "data/embeddings.npy"
@@ -24,10 +26,10 @@ def load_model() -> SentenceTransformer:
     if DEVICE == "cuda":
         print(f"GPU: {torch.cuda.get_device_name(0)}")
 
-    print(f"Загрузка модели: {MODEL_NAME}")
+    print(f"Загрузка модели: {EMBED_MODEL_NAME}")
 
     model = SentenceTransformer(
-        MODEL_NAME,
+        EMBED_MODEL_NAME,
         device=DEVICE
     )
 
