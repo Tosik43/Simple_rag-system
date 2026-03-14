@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
-from reranker import rerank  
+from reranker import rerank
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -19,6 +19,12 @@ LLM_MODEL = os.getenv("LLM_MODEL")
 TOP_K_RETRIEVE = 30
 TOP_K_RERANK = 5
 
+MIN_SIMILARITY_SCORE = 0.6
+
+NO_ANSWER_MESSAGE = (
+    "В предоставленных документах нет информации по этому вопросу. "
+    "Попробуйте задать ваш вопрос по другому."
+)
 
 app = FastAPI(title="RAG API")
 
@@ -52,7 +58,7 @@ def retrieve(query: str):
         limit=TOP_K_RETRIEVE
     )
 
-    return results.points  
+    return results.points
 
 
 def build_context(results):
@@ -60,14 +66,19 @@ def build_context(results):
     sources = []
 
     for i, r in enumerate(results):
+        text = r["text"]
+        source = r["source"]
+        page = r["page"]
+
         context += f"""
 Источник {i+1}
-Документ: {r['source']}
-Страница: {r['page']}
+Документ: {source}
+Страница: {page}
 Текст:
-{r['text']}
+{text}
 """
-        sources.append(f"{r['source']} (стр. {r['page']})")
+
+        sources.append(f"{source} (стр. {page})")
 
     return context, sources
 
@@ -76,16 +87,17 @@ def generate(query, context):
     prompt = f"""
 Ты — AI ассистент университета.
 
-Отвечай ТОЛЬКО на основе предоставленного контекста.
+Отвечай ТОЛЬКО на основе предоставленной информации.
+
+Если ответа в документах нет, напиши:
+В предоставленных документах нет информации по этому вопросу.
 
 Правила:
-- если ответа нет в контексте — скажи: "В предоставленных документах нет информации по этому вопросу"
-- не придумывай
+- не придумывай информацию
 - отвечай ясно и профессионально
-- не упоминай слово "контекст"
 - не объясняй свою работу
 
-Контекст:
+Информация:
 {context}
 
 Вопрос:
@@ -96,24 +108,49 @@ def generate(query, context):
         model=LLM_MODEL,
         messages=[
             {"role": "user", "content": prompt}
-        ]
+        ],
+        options={
+            "temperature": 0.2
+        }
     )
 
     return response["message"]["content"]
 
 
 def rag_pipeline(question):
-    
+
     results = retrieve(question)
-    
-    reranked_results = rerank(question, results, top_k=TOP_K_RERANK)
-    
+
+    if not results:
+        return NO_ANSWER_MESSAGE
+
+    # Проверка релевантности поиска
+    if results[0].score < MIN_SIMILARITY_SCORE:
+        return NO_ANSWER_MESSAGE
+
+    reranked_results = rerank(
+        question,
+        results,
+        top_k=TOP_K_RERANK
+    )
+
+    if not reranked_results:
+        return NO_ANSWER_MESSAGE
+
     context, sources = build_context(reranked_results)
-    
+
     answer = generate(question, context)
-    
-    answer_with_sources = f"{answer}\n\nИсточники:\n"
-    for source in sources:
+
+    answer_lower = answer.lower()
+
+    # Проверка ответа модели
+    if "нет информации" in answer_lower:
+        return NO_ANSWER_MESSAGE
+
+    # Добавляем источники только если ответ найден
+    answer_with_sources = answer + "\n\nИсточники:\n"
+
+    for source in set(sources):
         answer_with_sources += f"- {source}\n"
 
     return answer_with_sources
