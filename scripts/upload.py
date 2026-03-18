@@ -35,7 +35,7 @@ def upload_pdf_by_source(source_name: str):
         if metadata[i]["source"] == source_name:
             points.append(
                 PointStruct(
-                    id=i,  # 👈 оставили как ты хотел
+                    id=i,  # исправить надо
                     vector=embeddings[i].tolist(),
                     payload=metadata[i],
                 )
