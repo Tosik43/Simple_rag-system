@@ -33,27 +33,15 @@ def rerank(query: str, results: list, top_k: int = 3):
     if len(results) == 0:
         return []
 
-    pairs = []
-
-    for result in results:
-        pairs.append((query, result.payload["text"]))
+    pairs = [(query, r.payload["text"]) for r in results]
 
     scores = reranker.predict(
         pairs,
         batch_size=16
     )
 
-    reranked = []
+    scored_results = list(zip(results, scores))
 
-    for score, result in zip(scores, results):
+    scored_results.sort(key=lambda x: x[1], reverse=True)
 
-        reranked.append({
-            "score": float(score),
-            "text": result.payload["text"],
-            "source": result.payload["source"],
-            "page": result.payload["page"]
-        })
-
-    reranked.sort(key=lambda x: x["score"], reverse=True)
-
-    return reranked[:top_k]
+    return [r for r, _ in scored_results[:top_k]]
