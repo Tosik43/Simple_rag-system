@@ -1,14 +1,25 @@
 import os
+import json
+import hashlib
+import numpy as np
 import ollama
 
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
-from reranker import rerank
+from qdrant_client.models import (
+    PointStruct,
+    Filter,
+    FieldCondition,
+    MatchValue
+)
 from dotenv import load_dotenv
+from reranker import rerank
 
 load_dotenv()
+
 
 QDRANT_URL = os.getenv("QDRANT_URL")
 COLLECTION_NAME = os.getenv("COLLECTION_NAME")
@@ -16,15 +27,18 @@ COLLECTION_NAME = os.getenv("COLLECTION_NAME")
 EMBED_MODEL_NAME = os.getenv("EMBED_MODEL_NAME")
 LLM_MODEL = os.getenv("LLM_MODEL")
 
+EMBEDDINGS_FILE = os.getenv("EMBEDDINGS_FILE")
+METADATA_FILE = os.getenv("METADATA_FILE")
+
 TOP_K_RETRIEVE = 30
 TOP_K_RERANK = 5
-
 MIN_SIMILARITY_SCORE = 0.6
 
 NO_ANSWER_MESSAGE = (
     "В предоставленных документах нет информации по этому вопросу. "
     "Попробуйте задать ваш вопрос по другому."
 )
+
 
 app = FastAPI(title="RAG API")
 
@@ -43,6 +57,15 @@ class QuestionRequest(BaseModel):
 
 class AnswerResponse(BaseModel):
     answer: str
+
+
+def load_data():
+    embeddings = np.load(EMBEDDINGS_FILE)
+
+    with open(METADATA_FILE, "r", encoding="utf-8") as f:
+        metadata = json.load(f)
+
+    return embeddings, metadata
 
 
 def retrieve(query: str):
@@ -66,9 +89,9 @@ def build_context(results):
     sources = []
 
     for i, r in enumerate(results):
-        text = r["text"]
-        source = r["source"]
-        page = r["page"]
+        text = r.payload["text"]
+        source = r.payload["source"]
+        page = r.payload["page"]
 
         context += f"""
 Источник {i+1}
@@ -106,33 +129,20 @@ def generate(query, context):
 
     response = ollama.chat(
         model=LLM_MODEL,
-        messages=[
-            {"role": "user", "content": prompt}
-        ],
-        options={
-            "temperature": 0.2
-        }
+        messages=[{"role": "user", "content": prompt}],
+        options={"temperature": 0.2}
     )
 
     return response["message"]["content"]
 
 
 def rag_pipeline(question):
-
     results = retrieve(question)
 
-    if not results:
+    if not results or results[0].score < MIN_SIMILARITY_SCORE:
         return NO_ANSWER_MESSAGE
 
-    # Проверка релевантности поиска
-    if results[0].score < MIN_SIMILARITY_SCORE:
-        return NO_ANSWER_MESSAGE
-
-    reranked_results = rerank(
-        question,
-        results,
-        top_k=TOP_K_RERANK
-    )
+    reranked_results = rerank(question, results, top_k=TOP_K_RERANK)
 
     if not reranked_results:
         return NO_ANSWER_MESSAGE
@@ -141,27 +151,133 @@ def rag_pipeline(question):
 
     answer = generate(question, context)
 
-    answer_lower = answer.lower()
-
-    # Проверка ответа модели
-    if "нет информации" in answer_lower:
+    if "нет информации" in answer.lower():
         return NO_ANSWER_MESSAGE
 
-    # Добавляем источники только если ответ найден
-    answer_with_sources = answer + "\n\nИсточники:\n"
-
+    answer += "\n\nИсточники:\n"
     for source in set(sources):
-        answer_with_sources += f"- {source}\n"
+        answer += f"- {source}\n"
 
-    return answer_with_sources
+    return answer
 
 
 @app.post("/ask", response_model=AnswerResponse)
 def ask_question(req: QuestionRequest):
-    answer = rag_pipeline(req.question)
-    return AnswerResponse(answer=answer)
+    return AnswerResponse(answer=rag_pipeline(req.question))
 
 
 @app.get("/")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/documents")
+def get_documents():
+    sources = set()
+    offset = None
+
+    while True:
+        points, next_page = qdrant.scroll(
+            collection_name=COLLECTION_NAME,
+            with_payload=True,
+            limit=100,
+            offset=offset
+        )
+
+        if not points:
+            break
+
+        for point in points:
+            source = point.payload.get("source")
+            if source:
+                sources.add(source)
+
+        if next_page is None:
+            break
+
+        offset = next_page
+
+    return sorted(list(sources))
+
+
+@app.delete("/documents/{source_name}")
+def delete_document(source_name: str):
+    qdrant.delete(
+        collection_name=COLLECTION_NAME,
+        points_selector=Filter(
+            must=[
+                FieldCondition(
+                    key="source",
+                    match=MatchValue(value=source_name)
+                )
+            ]
+        )
+    )
+
+    return {"status": "deleted", "document": source_name}
+
+
+@app.post("/documents/upload/{source_name}")
+def upload_document(source_name: str):
+    embeddings, metadata = load_data()
+
+    points = []
+
+    for i in range(len(embeddings)):
+        if metadata[i]["source"] == source_name:
+            points.append(
+                PointStruct(
+                    id=hashlib.md5(
+                        metadata[i]["chunk_id"].encode("utf-8")
+                    ).hexdigest(),
+                    vector=embeddings[i].tolist(),
+                    payload=metadata[i],
+                )
+            )
+
+    if not points:
+        return {"status": "error", "message": "document not found"}
+
+    qdrant.upsert(
+        collection_name=COLLECTION_NAME,
+        points=points
+    )
+
+    return {"status": "uploaded", "chunks": len(points)}
+
+# ================= ADMIN UI =================
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_panel():
+    docs = get_documents()
+
+    options = "".join(
+        [f'<option value="{doc}">{doc}</option>' for doc in docs]
+    )
+
+    return f"""
+    <html>
+    <body>
+        <h2>Удаление документа</h2>
+
+        <select id="docSelect">
+            {options}
+        </select>
+
+        <button onclick="deleteDoc()">Удалить</button>
+
+        <script>
+            async function deleteDoc() {{
+                const doc = document.getElementById("docSelect").value;
+
+                await fetch(`/documents/${{doc}}`, {{
+                    method: "DELETE"
+                }});
+
+                alert("Удалено: " + doc);
+                location.reload();
+            }}
+        </script>
+    </body>
+    </html>
+    """
