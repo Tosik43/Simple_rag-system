@@ -22,7 +22,7 @@ reranker = CrossEncoder(
 print("Reranker loaded")
 
 
-def rerank(query: str, results: list, top_k: int = 3):
+def rerank(query: str, results: list):
 
     """
     results = list from Qdrant
@@ -44,4 +44,4 @@ def rerank(query: str, results: list, top_k: int = 3):
 
     scored_results.sort(key=lambda x: x[1], reverse=True)
 
-    return [r for r, _ in scored_results[:top_k]]
+    return [r for r, _ in scored_results]

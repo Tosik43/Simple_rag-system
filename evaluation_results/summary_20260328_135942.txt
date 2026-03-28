@@ -1,0 +1,26 @@
+==================================================
+EVALUATION SUMMARY - 2026-03-28 14:00:08
+Dataset: test system/rag_dataset_real.json
+K (top-k retrieved): 10
+==================================================
+
+Total questions: 169
+Hit Rate@10: 0.6568 (111/169)
+Recall@10: 0.6568
+MRR@10: 0.4121
+
+Distribution of recall values (binned by 0.1):
+  recall=0.0: 58 questions (34.3%)
+  recall=1.0: 111 questions (65.7%)
+
+Distribution of first relevant rank:
+  rank=1: 50 questions (29.6%)
+  rank=2: 22 questions (13.0%)
+  rank=3: 10 questions (5.9%)
+  rank=4: 9 questions (5.3%)
+  rank=5: 5 questions (3.0%)
+  rank=6: 4 questions (2.4%)
+  rank=7: 5 questions (3.0%)
+  rank=8: 1 questions (0.6%)
+  rank=9: 5 questions (3.0%)
+  >20: 58 questions (no relevant in top-10)
