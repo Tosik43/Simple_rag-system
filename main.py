@@ -32,7 +32,7 @@ METADATA_FILE = os.getenv("METADATA_FILE")
 
 TOP_K_RETRIEVE = 30
 TOP_K_RERANK = 5
-MIN_SIMILARITY_SCORE = 0.6
+MIN_SIMILARITY_SCORE = 0.1
 
 NO_ANSWER_MESSAGE = (
     "В предоставленных документах нет информации по этому вопросу. "
