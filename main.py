@@ -31,7 +31,7 @@ EMBEDDINGS_FILE = os.getenv("EMBEDDINGS_FILE")
 METADATA_FILE = os.getenv("METADATA_FILE")
 
 TOP_K_RETRIEVE = 30
-TOP_K_RERANK = 5
+TOP_K_RERANK = 3
 MIN_SIMILARITY_SCORE = 0.1
 
 NO_ANSWER_MESSAGE = (
@@ -139,20 +139,22 @@ def generate(query, context):
 def rag_pipeline(question):
     results = retrieve(question)
 
-    if not results or results[0].score < MIN_SIMILARITY_SCORE:
-        return NO_ANSWER_MESSAGE
+    # if not results or results[0].score < MIN_SIMILARITY_SCORE:
+    #     return NO_ANSWER_MESSAGE
 
-    reranked_results = rerank(question, results, top_k=TOP_K_RERANK)
+    reranked_results = rerank(question, results)
 
-    if not reranked_results:
-        return NO_ANSWER_MESSAGE
+    # if not reranked_results:
+    #     return NO_ANSWER_MESSAGE
+    
+    reranked_results = reranked_results[:TOP_K_RERANK]
 
     context, sources = build_context(reranked_results)
 
     answer = generate(question, context)
 
-    if "нет информации" in answer.lower():
-        return NO_ANSWER_MESSAGE
+    # if "нет информации" in answer.lower():
+    #     return NO_ANSWER_MESSAGE
 
     answer += "\n\nИсточники:\n"
     for source in set(sources):
