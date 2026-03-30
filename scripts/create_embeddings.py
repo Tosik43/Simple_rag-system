@@ -11,7 +11,7 @@ load_dotenv()
 
 EMBED_MODEL_NAME = os.getenv("EMBED_MODEL_NAME")
 
-CHUNKS_FILE = "data/chunks.json"
+CHUNKS_FILE = "data/chunks_2.json"
 EMBEDDINGS_FILE = "data/embeddings.npy"
 METADATA_FILE = "data/metadata.json"
 
@@ -54,7 +54,8 @@ def load_chunks(path: str) -> List[Dict]:
 # проверка структуры chunks
 def validate_chunks(chunks: List[Dict]):
 
-    required_fields = {"chunk_id", "text", "source", "page"}
+    # Обновленные обязательные поля для нового формата
+    required_fields = {"chunk_id", "text", "source", "page_start", "page_end", "title"}
 
     for i, chunk in enumerate(chunks):
 
@@ -109,13 +110,16 @@ def save_metadata(chunks: List[Dict], path: str):
     metadata = []
 
     for chunk in chunks:
-
-        metadata.append({
+        metadata_item = {
             "chunk_id": chunk["chunk_id"],
             "text": chunk["text"],
             "source": chunk["source"],
-            "page": chunk["page"]
-        })
+            "title": chunk.get("title", ""), 
+            "page_start": chunk.get("page_start"),
+            "page_end": chunk.get("page_end"),
+        }
+            
+        metadata.append(metadata_item)
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
 

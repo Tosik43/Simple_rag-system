@@ -91,17 +91,34 @@ def build_context(results):
     for i, r in enumerate(results):
         text = r.payload["text"]
         source = r.payload["source"]
-        page = r.payload["page"]
-
+        
+        # Адаптация под новый формат страниц
+        page_start = r.payload.get("page_start")
+        page_end = r.payload.get("page_end")
+        title = r.payload.get("title", "")
+        
+        # Формируем информацию о страницах
+        if page_start is not None:
+            if page_end is not None and page_end != page_start:
+                page_info = f"стр. {page_start}-{page_end}"
+            else:
+                page_info = f"стр. {page_start}"
+        else:
+            # Обратная совместимость с полем "page"
+            page_info = f"стр. {r.payload.get('page', 'не указана')}"
+        
+        # Добавляем заголовок, если есть
+        title_info = f"\nЗаголовок: {title}" if title else ""
+        
         context += f"""
 Источник {i+1}
 Документ: {source}
-Страница: {page}
+{page_info}{title_info}
 Текст:
 {text}
 """
 
-        sources.append(f"{source} (стр. {page})")
+        sources.append(f"{source} ({page_info})")
 
     return context, sources
 
@@ -225,13 +242,15 @@ def upload_document(source_name: str):
 
     for i in range(len(embeddings)):
         if metadata[i]["source"] == source_name:
+            # Используем chunk_id для генерации ID
+            chunk_id = metadata[i]["chunk_id"]
+            point_id = hashlib.md5(chunk_id.encode("utf-8")).hexdigest()
+            
             points.append(
                 PointStruct(
-                    id=hashlib.md5(
-                        metadata[i]["chunk_id"].encode("utf-8")
-                    ).hexdigest(),
+                    id=point_id,
                     vector=embeddings[i].tolist(),
-                    payload=metadata[i],
+                    payload=metadata[i],  # metadata уже содержит все поля
                 )
             )
 
