@@ -24,12 +24,6 @@ print("Reranker loaded")
 
 def rerank(query: str, results: list, top_k: int = 3):
 
-    """
-    results = list from Qdrant
-
-    returns reranked results
-    """
-
     if len(results) == 0:
         return []
 
@@ -44,4 +38,10 @@ def rerank(query: str, results: list, top_k: int = 3):
 
     scored_results.sort(key=lambda x: x[1], reverse=True)
 
-    return [r for r, _ in scored_results[:top_k]]
+    # сохраняем score
+    output = []
+    for r, score in scored_results[:top_k]:
+        r.score = float(score)  # перезаписываем score
+        output.append(r)
+
+    return output

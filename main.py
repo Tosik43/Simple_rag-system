@@ -3,6 +3,8 @@ import json
 import hashlib
 import numpy as np
 import ollama
+import csv
+from datetime import datetime
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
@@ -29,6 +31,50 @@ LLM_MODEL = os.getenv("LLM_MODEL")
 
 EMBEDDINGS_FILE = os.getenv("EMBEDDINGS_FILE")
 METADATA_FILE = os.getenv("METADATA_FILE")
+
+LOG_FILE = "rag_logs.csv"
+
+
+def save_to_csv(
+    question,
+    retrieved,
+    reranked,
+    answer
+):
+    file_exists = os.path.isfile(LOG_FILE)
+
+    with open(LOG_FILE, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+
+        # header (один раз)
+        if not file_exists:
+            writer.writerow([
+                "timestamp",
+                "question",
+                "retrieved_chunks",
+                "retrieved_scores",
+                "reranked_chunks",
+                "reranked_scores",
+                "answer"
+            ])
+
+        # до rerank
+        retrieved_texts = [r.payload["text"] for r in retrieved]
+        retrieved_scores = [r.score for r in retrieved]
+
+        # после rerank
+        reranked_texts = [r.payload["text"] for r in reranked]
+        reranked_scores = [r.score for r in reranked]
+
+        writer.writerow([
+            datetime.utcnow().isoformat(),
+            question,
+            json.dumps(retrieved_texts, ensure_ascii=False),
+            json.dumps(retrieved_scores),
+            json.dumps(reranked_texts, ensure_ascii=False),
+            json.dumps(reranked_scores),
+            answer
+        ])
 
 TOP_K_RETRIEVE = 30
 TOP_K_RERANK = 5
@@ -152,11 +198,20 @@ def rag_pipeline(question):
     answer = generate(question, context)
 
     if "нет информации" in answer.lower():
-        return NO_ANSWER_MESSAGE
+        answer = NO_ANSWER_MESSAGE
 
-    answer += "\n\nИсточники:\n"
-    for source in set(sources):
-        answer += f"- {source}\n"
+    # ✅ СОХРАНЕНИЕ В CSV
+    save_to_csv(
+        question,
+        results,
+        reranked_results,
+        answer
+    )
+
+    if answer != NO_ANSWER_MESSAGE:
+        answer += "\n\nИсточники:\n"
+        for source in set(sources):
+            answer += f"- {source}\n"
 
     return answer
 
