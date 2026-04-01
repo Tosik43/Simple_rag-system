@@ -33,6 +33,7 @@ datasets/
 *.csv
 *.jsonl
 *.parquet
+*.xlsx
 
 # Models
 models/
