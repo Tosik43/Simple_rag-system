@@ -28,7 +28,7 @@ METADATA_FILE = os.getenv("METADATA_FILE")
 
 TOP_K_RETRIEVE = 10
 TOP_K_RERANK = 3
-MIN_SIMILARITY_SCORE = 0.1
+MIN_SIMILARITY_SCORE = 0.3
 
 NO_ANSWER_MESSAGE = "Нет информации по этому вопросу."
 
@@ -322,7 +322,7 @@ def rag_pipeline(question):
 # ================= UI =================
 st.set_page_config(page_title="RAG Chat", layout="wide")
 
-st.title("🤖 RAG Chat (GPT-style)")
+st.title("🤖 RAG система для преподвателей")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -353,74 +353,3 @@ if prompt := st.chat_input("Задайте вопрос..."):
             st.markdown(full_answer)
 
     st.session_state.messages.append({"role": "assistant", "content": full_answer})
-
-# ================= SIDEBAR =================
-st.sidebar.title("📂 Управление документами")
-
-# Load document list
-def get_documents():
-    sources = set()
-    offset = None
-
-    while True:
-        points, next_page = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            with_payload=True,
-            limit=100,
-            offset=offset
-        )
-
-        if not points:
-            break
-
-        for point in points:
-            source = point.payload.get("source")
-            if source:
-                sources.add(source)
-
-        if next_page is None:
-            break
-
-        offset = next_page
-
-    return sorted(list(sources))
-
-
-docs = get_documents()
-selected_doc = st.sidebar.selectbox("Документы", docs)
-
-if st.sidebar.button("Удалить документ"):
-    qdrant.delete(
-        collection_name=COLLECTION_NAME,
-        points_selector=Filter(
-            must=[
-                FieldCondition(
-                    key="source",
-                    match=MatchValue(value=selected_doc)
-                )
-            ]
-        )
-    )
-    st.sidebar.success(f"Удален: {selected_doc}")
-
-# Upload
-if st.sidebar.button("Загрузить документ"):
-    embeddings, metadata = load_data()
-
-    points = []
-
-    for i in range(len(embeddings)):
-        if metadata[i]["source"] == selected_doc:
-            points.append(
-                PointStruct(
-                    id=hashlib.md5(metadata[i]["chunk_id"].encode()).hexdigest(),
-                    vector=embeddings[i].tolist(),
-                    payload=metadata[i]
-                )
-            )
-
-    if points:
-        qdrant.upsert(collection_name=COLLECTION_NAME, points=points)
-        st.sidebar.success(f"Загружено: {len(points)} чанков")
-    else:
-        st.sidebar.error("Документ не найден")
