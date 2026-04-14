@@ -322,7 +322,7 @@ def rag_pipeline(question):
 # ================= UI =================
 st.set_page_config(page_title="RAG Chat", layout="wide")
 
-st.title("🤖 RAG система для преподвателей")
+st.title("🤖 RAG система для преподавателей")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
