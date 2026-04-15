@@ -20,6 +20,8 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWD")
 QDRANT_URL = os.getenv("QDRANT_URL")
 COLLECTION_NAME = os.getenv("COLLECTION_NAME")
 
+MAX_FILE_SIZE_MB = 10  # 🔒 ограничение размера
+
 qdrant = QDRANT_URL and QdrantClient(url=QDRANT_URL)
 
 st.set_page_config(page_title="Admin Panel", layout="wide")
@@ -35,7 +37,6 @@ if not st.session_state.auth:
         logo_col1, logo_col2, logo_col3 = st.columns([1, 2, 1])
         with logo_col2: 
             st.image("SUSU_logo.png", width=360)
-
         st.markdown("## 🔐 Вход в админ-панель")
 
         password = st.text_input("Пароль", type="password")
@@ -47,6 +48,11 @@ if not st.session_state.auth:
             else:
                 st.error("Неверный пароль")
 
+    st.stop()
+
+# ================= CHECK QDRANT =================
+if not qdrant:
+    st.error("❌ Qdrant не настроен")
     st.stop()
 
 # ================= UI =================
@@ -64,6 +70,7 @@ def get_model():
     return load_model()
 
 
+@st.cache_data(ttl=60)
 def get_documents():
     sources = set()
     offset = None
@@ -96,96 +103,101 @@ def parse_file_to_pages(uploaded_file):
     pages = []
     name = uploaded_file.name.lower()
 
-    # TXT
-    if name.endswith(".txt"):
-        text = uploaded_file.read().decode("utf-8")
-        pages.append({"text": text, "page": 1, "source": uploaded_file.name})
+    try:
+        # TXT
+        if name.endswith(".txt"):
+            text = uploaded_file.read().decode("utf-8").strip()
+            pages.append({"text": text, "page": 1, "source": uploaded_file.name})
 
-    # PDF
-    elif name.endswith(".pdf"):
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            tmp.write(uploaded_file.read())
-            path = tmp.name
+        # PDF
+        elif name.endswith(".pdf"):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(uploaded_file.read())
+                path = tmp.name
 
-        doc = fitz.open(path)
+            doc = fitz.open(path)
 
-        for i, page in enumerate(doc):
+            for i, page in enumerate(doc):
+                pages.append({
+                    "text": page.get_text().strip(),
+                    "page": i + 1,
+                    "source": uploaded_file.name
+                })
+
+            doc.close()
+            os.remove(path)
+
+        # DOCX
+        elif name.endswith(".docx"):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
+                tmp.write(uploaded_file.read())
+                path = tmp.name
+
+            doc = Document(path)
+            text = "\n".join([p.text for p in doc.paragraphs]).strip()
+
+            os.remove(path)
+
             pages.append({
-                "text": page.get_text(),
-                "page": i + 1,
+                "text": text,
+                "page": 1,
                 "source": uploaded_file.name
             })
 
-        doc.close()
-        os.remove(path)
-
-    # DOCX
-    elif name.endswith(".docx"):
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
-            tmp.write(uploaded_file.read())
-            path = tmp.name
-
-        doc = Document(path)
-        text = "\n".join([p.text for p in doc.paragraphs])
-
-        os.remove(path)
-
-        pages.append({
-            "text": text,
-            "page": 1,
-            "source": uploaded_file.name
-        })
+    except Exception as e:
+        st.error(f"Ошибка при чтении файла {uploaded_file.name}: {e}")
 
     return pages
+
 
 def preview_file(uploaded_file):
     name = uploaded_file.name.lower()
 
-    # ===== PDF → IMAGE =====
-    if name.endswith(".pdf"):
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            tmp.write(uploaded_file.read())
-            path = tmp.name
+    try:
+        if name.endswith(".pdf"):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(uploaded_file.read())
+                path = tmp.name
 
-        doc = fitz.open(path)
+            doc = fitz.open(path)
 
-        img_bytes = None
+            img_bytes = None
 
-        if len(doc) > 0:
-            page = doc[0]
-            matrix = fitz.Matrix(2, 2)
-            pix = page.get_pixmap(matrix=matrix)
-            img_bytes = pix.tobytes("png")
+            if len(doc) > 0:
+                page = doc[0]
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+                img_bytes = pix.tobytes("png")
 
-        doc.close()
-        os.remove(path)
+            doc.close()
+            os.remove(path)
+
+            uploaded_file.seek(0)
+
+            if img_bytes:
+                return {"type": "image", "data": img_bytes}
+
+        elif name.endswith(".txt"):
+            text = uploaded_file.read().decode("utf-8")
+
+        elif name.endswith(".docx"):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
+                tmp.write(uploaded_file.read())
+                path = tmp.name
+
+            doc = Document(path)
+            text = "\n".join([p.text for p in doc.paragraphs])
+            os.remove(path)
+
+        else:
+            text = "Не удалось показать предпросмотр"
 
         uploaded_file.seek(0)
 
-        if img_bytes:
-            return {"type": "image", "data": img_bytes}
+        return {"type": "text", "data": text[:2000]}
 
-    # ===== TXT =====
-    elif name.endswith(".txt"):
-        text = uploaded_file.read().decode("utf-8")
+    except Exception as e:
+        return {"type": "text", "data": f"Ошибка предпросмотра: {e}"}
 
-    # ===== DOCX =====
-    elif name.endswith(".docx"):
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
-            tmp.write(uploaded_file.read())
-            path = tmp.name
-
-        doc = Document(path)
-        text = "\n".join([p.text for p in doc.paragraphs])
-
-        os.remove(path)
-
-    else:
-        text = "Не удалось показать предпросмотр"
-
-    uploaded_file.seek(0)
-
-    return {"type": "text", "data": text[:2000]}
 
 def safe_upsert(points, progress, start_progress=0.8):
     BATCH_SIZE = 128
@@ -193,7 +205,7 @@ def safe_upsert(points, progress, start_progress=0.8):
     for i in range(0, len(points), BATCH_SIZE):
         batch = points[i:i + BATCH_SIZE]
 
-        for _ in range(3):  # retry
+        for _ in range(3):
             try:
                 qdrant.upsert(
                     collection_name=COLLECTION_NAME,
@@ -201,7 +213,7 @@ def safe_upsert(points, progress, start_progress=0.8):
                 )
                 break
             except Exception as e:
-                print(f"[QDRANT ERROR] {e}")
+                st.warning(f"Ошибка загрузки батча: {e}")
                 time.sleep(2)
 
         progress.progress(
@@ -213,6 +225,7 @@ def safe_upsert(points, progress, start_progress=0.8):
 st.subheader("📂 Управление документами")
 
 docs = get_documents()
+st.caption(f"📊 В базе документов: {len(docs)}")
 
 col1, col2 = st.columns(2)
 
@@ -222,19 +235,23 @@ with col1:
         selected_doc = st.selectbox("Документы", docs)
 
         if st.button("🗑 Удалить документ"):
-            qdrant.delete(
-                collection_name=COLLECTION_NAME,
-                points_selector=Filter(
-                    must=[
-                        FieldCondition(
-                            key="source",
-                            match=MatchValue(value=selected_doc)
-                        )
-                    ]
+            try:
+                qdrant.delete(
+                    collection_name=COLLECTION_NAME,
+                    points_selector=Filter(
+                        must=[
+                            FieldCondition(
+                                key="source",
+                                match=MatchValue(value=selected_doc)
+                            )
+                        ]
+                    )
                 )
-            )
-            st.success(f"Удален: {selected_doc}")
-            st.rerun()
+                st.success(f"Удален: {selected_doc}")
+                st.cache_data.clear()
+                st.rerun()
+            except Exception as e:
+                st.error(f"Ошибка удаления: {e}")
     else:
         st.warning("Нет документов")
 
@@ -248,90 +265,89 @@ with col2:
 
     if uploaded_files:
 
+        # 🔒 проверка размера
+        for f in uploaded_files:
+            if f.size > MAX_FILE_SIZE_MB * 1024 * 1024:
+                st.error(f"{f.name} превышает {MAX_FILE_SIZE_MB} MB")
+                st.stop()
+
         st.info(f"📂 Выбрано файлов: {len(uploaded_files)}")
 
-        st.markdown("### 👀 Предпросмотр файлов")
-
-        for i, file in enumerate(uploaded_files):
+        for file in uploaded_files:
             with st.expander(f"📄 {file.name}"):
                 preview = preview_file(file)
-
                 if preview["type"] == "image":
-                    st.image(preview["data"], caption="Первая страница PDF")
-
+                    st.image(preview["data"])
                 else:
-                    st.code(preview["data"], language="text")
+                    st.code(preview["data"])
 
-        existing_docs = set(get_documents())
+        existing_docs = {d.lower() for d in get_documents()}
 
         duplicate_files = [
             f.name for f in uploaded_files
-            if f.name in existing_docs
+            if f.name.lower() in existing_docs
         ]
 
         if duplicate_files:
-            st.error(
-                "❌ Такие документы уже есть в базе:\n\n" +
-                "\n".join(duplicate_files)
-            )
+            st.error("❌ Уже есть:\n" + "\n".join(duplicate_files))
             st.stop()
 
         if st.button("📤 Загрузить в базу"):
 
-            progress = st.progress(0)
-            status = st.empty()
+            try:
+                progress = st.progress(0)
+                status = st.empty()
 
-            # ===== 1. PARSE =====
-            status.write("📄 Чтение файлов...")
-            all_pages = []
+                # PARSE
+                status.write("📄 Чтение файлов...")
+                all_pages = []
 
-            for i, file in enumerate(uploaded_files):
-                pages = parse_file_to_pages(file)
-                all_pages.extend(pages)
-                progress.progress((i + 1) / len(uploaded_files) * 0.2)
+                for i, file in enumerate(uploaded_files):
+                    pages = parse_file_to_pages(file)
+                    all_pages.extend(pages)
+                    progress.progress((i + 1) / len(uploaded_files) * 0.2)
 
-            # ===== 2. CHUNKING =====
-            status.write("✂️ Разбиение на чанки...")
-            chunks = chunk_pages(all_pages)
-            progress.progress(0.4)
+                # CHUNK
+                status.write("✂️ Разбиение...")
+                chunks = chunk_pages(all_pages)
+                progress.progress(0.4)
 
-            if not chunks:
-                st.error("Нет чанков")
-                st.stop()
+                if not chunks:
+                    st.error("Нет чанков")
+                    st.stop()
 
-            # ===== 3. EMBEDDINGS =====
-            status.write("🧠 Создание embeddings...")
-            model = get_model()
+                # EMBEDDINGS
+                status.write("🧠 Embeddings...")
+                model = get_model()
+                embeddings = create_embeddings(model, chunks, batch_size=64)
+                progress.progress(0.8)
 
-            embeddings = create_embeddings(
-                model,
-                chunks,
-                batch_size=64
-            )
+                # QDRANT
+                status.write("📦 Загрузка...")
+                points = [
+                    PointStruct(
+                        id=hashlib.md5(c["chunk_id"].encode()).hexdigest(),
+                        vector=v.tolist(),
+                        payload=c
+                    )
+                    for c, v in zip(chunks, embeddings)
+                ]
 
-            progress.progress(0.8)
+                safe_upsert(points, progress)
 
-            # ===== 4. QDRANT =====
-            status.write("📦 Загрузка в Qdrant...")
+                progress.progress(1.0)
 
-            points = [
-                PointStruct(
-                    id=hashlib.md5(c["chunk_id"].encode()).hexdigest(),
-                    vector=v.tolist(),
-                    payload=c
-                )
-                for c, v in zip(chunks, embeddings)
-            ]
+                # DONE
+                status.write("✅ Готово!")
+                st.success("✅ Документы успешно загружены!")
+                st.info(f"Добавлено чанков: {len(points)}")
 
-            safe_upsert(points, progress)
+                st.cache_data.clear()
 
-            progress.progress(1.0)
+                with st.spinner("⏳ Обновление страницы..."):
+                    time.sleep(5)
 
-            # ===== DONE =====
-            status.write("✅ Готово!")
-            st.success(f"Загружено: {len(points)} чанков")
+                st.rerun()
 
-            with st.spinner("⏳ Обновление страницы..."):
-                time.sleep(5)
-
-            st.rerun()
+            except Exception as e:
+                st.error(f"❌ Ошибка загрузки: {e}")
