@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 import fitz
 from docx import Document
 import tempfile
+import time
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import PointStruct, Filter, FieldCondition, MatchValue
@@ -115,6 +116,9 @@ def parse_file_to_pages(uploaded_file):
                 "source": uploaded_file.name
             })
 
+        doc.close()
+        os.remove(path)
+
     # DOCX
     elif name.endswith(".docx"):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
@@ -123,6 +127,8 @@ def parse_file_to_pages(uploaded_file):
 
         doc = Document(path)
         text = "\n".join([p.text for p in doc.paragraphs])
+
+        os.remove(path)
 
         pages.append({
             "text": text,
@@ -143,16 +149,20 @@ def preview_file(uploaded_file):
 
         doc = fitz.open(path)
 
+        img_bytes = None
+
         if len(doc) > 0:
             page = doc[0]
-
-            # увеличиваем качество (zoom)
             matrix = fitz.Matrix(2, 2)
             pix = page.get_pixmap(matrix=matrix)
-
             img_bytes = pix.tobytes("png")
 
-            uploaded_file.seek(0)
+        doc.close()
+        os.remove(path)
+
+        uploaded_file.seek(0)
+
+        if img_bytes:
             return {"type": "image", "data": img_bytes}
 
     # ===== TXT =====
@@ -168,12 +178,35 @@ def preview_file(uploaded_file):
         doc = Document(path)
         text = "\n".join([p.text for p in doc.paragraphs])
 
+        os.remove(path)
+
     else:
         text = "Не удалось показать предпросмотр"
 
     uploaded_file.seek(0)
 
     return {"type": "text", "data": text[:2000]}
+
+def safe_upsert(points, progress, start_progress=0.8):
+    BATCH_SIZE = 128
+
+    for i in range(0, len(points), BATCH_SIZE):
+        batch = points[i:i + BATCH_SIZE]
+
+        for _ in range(3):  # retry
+            try:
+                qdrant.upsert(
+                    collection_name=COLLECTION_NAME,
+                    points=batch
+                )
+                break
+            except Exception as e:
+                print(f"[QDRANT ERROR] {e}")
+                time.sleep(2)
+
+        progress.progress(
+            min(1.0, start_progress + (i + len(batch)) / len(points) * 0.2)
+        )
 
 
 # ================= DOCUMENTS =================
@@ -290,10 +323,7 @@ with col2:
                 for c, v in zip(chunks, embeddings)
             ]
 
-            qdrant.upsert(
-                collection_name=COLLECTION_NAME,
-                points=points
-            )
+            safe_upsert(points, progress)
 
             progress.progress(1.0)
 
@@ -301,5 +331,7 @@ with col2:
             status.write("✅ Готово!")
             st.success(f"Загружено: {len(points)} чанков")
 
-            # очистка состояния
-            st.session_state.clear()
+            with st.spinner("⏳ Обновление страницы..."):
+                time.sleep(5)
+
+            st.rerun()
