@@ -1,11 +1,13 @@
 import streamlit as st
 import os
 import hashlib
-from dotenv import load_dotenv
 import fitz
 from docx import Document
 import tempfile
 import time
+
+from datetime import datetime
+from core.config import *
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import PointStruct, Filter, FieldCondition, MatchValue
@@ -13,14 +15,6 @@ from qdrant_client.models import PointStruct, Filter, FieldCondition, MatchValue
 from scripts.chunking import chunk_pages
 from scripts.create_embeddings import load_model, create_embeddings
 
-# ================= CONFIG =================
-load_dotenv()
-
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWD")
-QDRANT_URL = os.getenv("QDRANT_URL")
-COLLECTION_NAME = os.getenv("COLLECTION_NAME")
-
-MAX_FILE_SIZE_MB = 10  # 🔒 ограничение размера
 
 qdrant = QDRANT_URL and QdrantClient(url=QDRANT_URL)
 
@@ -65,14 +59,21 @@ if st.button("🚪 Выйти"):
 st.divider()
 
 # ================= FUNCTIONS =================
+def format_date(dt_str):
+    try:
+        dt = datetime.fromisoformat(dt_str)
+        return dt.strftime("%d.%m.%Y %H:%M")
+    except:
+        return "—"
+
+
 @st.cache_resource
 def get_model():
     return load_model()
 
-
 @st.cache_data(ttl=60)
 def get_documents():
-    sources = set()
+    sources = {}
     offset = None
 
     while True:
@@ -88,15 +89,17 @@ def get_documents():
 
         for point in points:
             source = point.payload.get("source")
-            if source:
-                sources.add(source)
+            upload_time = point.payload.get("upload_time")
+
+            if source and source not in sources:
+                sources[source] = upload_time
 
         if next_page is None:
             break
 
         offset = next_page
 
-    return sorted(list(sources))
+    return sources
 
 
 def parse_file_to_pages(uploaded_file):
@@ -232,7 +235,11 @@ col1, col2 = st.columns(2)
 # DELETE
 with col1:
     if docs:
-        selected_doc = st.selectbox("Документы", docs)
+        selected_doc = st.selectbox(
+            "Документы",
+            list(docs.keys()),
+            format_func=lambda x: f"{x} (🕒 {format_date(docs[x])})"
+        )
 
         if st.button("🗑 Удалить документ"):
             try:
@@ -265,13 +272,18 @@ with col2:
 
     if uploaded_files:
 
+        if len(uploaded_files) > MAX_FILES:
+            st.error(f"Максимум {MAX_FILES} файлов за раз")
+            st.stop()
+
+
         # 🔒 проверка размера
         for f in uploaded_files:
             if f.size > MAX_FILE_SIZE_MB * 1024 * 1024:
                 st.error(f"{f.name} превышает {MAX_FILE_SIZE_MB} MB")
                 st.stop()
 
-        st.info(f"📂 Выбрано файлов: {len(uploaded_files)}")
+        st.info(f"📂 Файлов к загрузке: {len(uploaded_files)}")
 
         for file in uploaded_files:
             with st.expander(f"📄 {file.name}"):
@@ -281,7 +293,7 @@ with col2:
                 else:
                     st.code(preview["data"])
 
-        existing_docs = {d.lower() for d in get_documents()}
+        existing_docs = {d.lower() for d in docs.keys()}
 
         duplicate_files = [
             f.name for f in uploaded_files
@@ -324,11 +336,13 @@ with col2:
 
                 # QDRANT
                 status.write("📦 Загрузка...")
+                upload_time = datetime.utcnow().isoformat()
+
                 points = [
                     PointStruct(
                         id=hashlib.md5(c["chunk_id"].encode()).hexdigest(),
                         vector=v.tolist(),
-                        payload=c
+                        payload={**c, "upload_time": upload_time}
                     )
                     for c, v in zip(chunks, embeddings)
                 ]
