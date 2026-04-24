@@ -148,7 +148,9 @@ def generate(query, context):
         options={"temperature": 0.2}
     )
 
-    print(f"[STEP 5] Ответ от LLM получен за {time.time() - t0:.3f} сек")
+    gen_time = time.time() - t0
 
-    return response["message"]["content"]
+    print(f"[STEP 5] Ответ от LLM получен за {gen_time:.3f} сек")
+
+    return response["message"]["content"], gen_time
 

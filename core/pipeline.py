@@ -15,7 +15,7 @@ def rag_pipeline(question, embed_model, qdrant):
     total_start = time.time()
 
     # ===== RETRIEVE =====
-    results = retrieve(question, embed_model, qdrant)
+    results, embed_time, search_time = retrieve(question, embed_model, qdrant)
 
     if not results or results[0].score < MIN_SIMILARITY_SCORE:
         print("[RESULT] Нет релевантных данных")
@@ -25,7 +25,8 @@ def rag_pipeline(question, embed_model, qdrant):
     print("[STEP 3] Реранкинг...")
     t2 = time.time()
     reranked_results = rerank(question, results, top_k=TOP_K_RERANK)
-    print(f"[STEP 3] Реранкинг завершен за {time.time() - t2:.3f} сек")
+    rerank_time = time.time() - t2
+    print(f"[STEP 3] Реранкинг завершен за {rerank_time:.3f} сек")
 
     if not reranked_results:
         print("[RESULT] Реранкинг не дал результатов")
@@ -35,10 +36,19 @@ def rag_pipeline(question, embed_model, qdrant):
     context, sources = build_context(reranked_results)
 
     # ===== GENERATE =====
-    answer = generate(question, context)
+    answer, gen_time = generate(question, context)
 
     # ===== LOG =====
-    save_to_csv(question, results, reranked_results, answer)
+    save_to_csv(
+        question,
+        results,
+        reranked_results,
+        answer,
+        embed_time,
+        search_time,
+        rerank_time,
+        gen_time
+    )
 
     print(f"[DONE] Полный pipeline: {time.time() - total_start:.3f} сек")
 
