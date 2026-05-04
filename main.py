@@ -1,9 +1,12 @@
 import os
 import json
+import csv
+import time
 import hashlib
 import numpy as np
 import ollama
 
+from datetime import datetime
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -20,6 +23,7 @@ from reranker import rerank
 
 load_dotenv()
 
+# ================= CONFIG =================
 
 QDRANT_URL = os.getenv("QDRANT_URL")
 COLLECTION_NAME = os.getenv("COLLECTION_NAME")
@@ -34,11 +38,14 @@ TOP_K_RETRIEVE = 30
 TOP_K_RERANK = 3
 MIN_SIMILARITY_SCORE = 0.1
 
+LOG_FILE = "logs/rag_logs.csv"
+
 NO_ANSWER_MESSAGE = (
     "В предоставленных документах нет информации по этому вопросу. "
     "Попробуйте задать ваш вопрос по другому."
 )
 
+# ================= INIT =================
 
 app = FastAPI(title="RAG API")
 
@@ -50,6 +57,61 @@ qdrant = QdrantClient(url=QDRANT_URL)
 
 print("API READY")
 
+# ================= LOGGER =================
+
+def save_to_csv(
+    question,
+    retrieved,
+    reranked,
+    answer,
+    embed_time,
+    search_time,
+    rerank_time,
+    gen_time
+):
+    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+
+    file_exists = os.path.isfile(LOG_FILE)
+
+    with open(LOG_FILE, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+
+        if not file_exists:
+            writer.writerow([
+                "timestamp",
+                "question",
+                "retrieved_chunks",
+                "retrieved_scores",
+                "reranked_chunks",
+                "reranked_scores",
+                "answer",
+                "embed_time",
+                "search_time",
+                "rerank_time",
+                "generation_time"
+            ])
+
+        retrieved_texts = [r.payload.get("text", "") for r in retrieved]
+        retrieved_scores = [getattr(r, "score", None) for r in retrieved]
+
+        reranked_texts = [r.payload.get("text", "") for r in reranked]
+        reranked_scores = [getattr(r, "score", None) for r in reranked]
+
+        writer.writerow([
+            datetime.utcnow().isoformat(),
+            question,
+            json.dumps(retrieved_texts, ensure_ascii=False),
+            json.dumps(retrieved_scores),
+            json.dumps(reranked_texts, ensure_ascii=False),
+            json.dumps(reranked_scores),
+            answer,
+            embed_time,
+            search_time,
+            rerank_time,
+            gen_time
+        ])
+
+# ================= API MODELS =================
 
 class QuestionRequest(BaseModel):
     question: str
@@ -58,6 +120,7 @@ class QuestionRequest(BaseModel):
 class AnswerResponse(BaseModel):
     answer: str
 
+# ================= CORE =================
 
 def load_data():
     embeddings = np.load(EMBEDDINGS_FILE)
@@ -69,11 +132,17 @@ def load_data():
 
 
 def retrieve(query: str):
+    t0 = time.time()
+
     query_vector = EMBED_MODEL.encode(
         query,
         normalize_embeddings=True,
         convert_to_numpy=True
     )
+
+    embed_time = time.time() - t0
+
+    t1 = time.time()
 
     results = qdrant.query_points(
         collection_name=COLLECTION_NAME,
@@ -81,7 +150,9 @@ def retrieve(query: str):
         limit=TOP_K_RETRIEVE
     )
 
-    return results.points
+    search_time = time.time() - t1
+
+    return results.points, embed_time, search_time
 
 
 def build_context(results):
@@ -89,9 +160,9 @@ def build_context(results):
     sources = []
 
     for i, r in enumerate(results):
-        text = r.payload["text"]
-        source = r.payload["source"]
-        page = r.payload["page"]
+        text = r.payload.get("text", "")
+        source = r.payload.get("source", "unknown")
+        page = r.payload.get("page", "?")
 
         context += f"""
 Источник {i+1}
@@ -252,31 +323,47 @@ def generate(query, context):
 
 
 def rag_pipeline(question):
-    results = retrieve(question)
+    # === RETRIEVE ===
+    results, embed_time, search_time = retrieve(question)
 
-    # if not results or results[0].score < MIN_SIMILARITY_SCORE:
-    #     return NO_ANSWER_MESSAGE
-
+    # === RERANK ===
+    t0 = time.time()
     reranked_results = rerank(question, results)
+    rerank_time = time.time() - t0
 
-    # if not reranked_results:
-    #     return NO_ANSWER_MESSAGE
-    
     reranked_results = reranked_results[:TOP_K_RERANK]
 
+    # === CONTEXT ===
     context, sources = build_context(reranked_results)
 
+    # === GENERATION ===
+    t0 = time.time()
     answer = generate(question, context)
+    gen_time = time.time() - t0
 
-    # if "нет информации" in answer.lower():
-    #     return NO_ANSWER_MESSAGE
-
+    # === SOURCES ===
     answer += "\n\nИсточники:\n"
     for source in set(sources):
         answer += f"- {source}\n"
 
+    # === LOGGING ===
+    try:
+        save_to_csv(
+            question=question,
+            retrieved=results,
+            reranked=reranked_results,
+            answer=answer,
+            embed_time=embed_time,
+            search_time=search_time,
+            rerank_time=rerank_time,
+            gen_time=gen_time
+        )
+    except Exception as e:
+        print("Logging error:", e)
+
     return answer
 
+# ================= ROUTES =================
 
 @app.post("/ask", response_model=AnswerResponse)
 def ask_question(req: QuestionRequest):
