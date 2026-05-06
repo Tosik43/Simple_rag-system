@@ -2,7 +2,7 @@ import time
 
 from core.retrieval import retrieve
 from core.context import build_context
-from core.generation import generate
+from core.generation_gigachat import generate
 from core.config import MIN_SIMILARITY_SCORE, NO_ANSWER_MESSAGE, TOP_K_RERANK
 from reranker import rerank
 from core.logger import save_to_csv

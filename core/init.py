@@ -3,13 +3,15 @@ import streamlit as st
 
 from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
-from core.config import EMBED_MODEL_NAME, QDRANT_URL
+from core.config import EMBED_MODEL_NAME, QDRANT_URL, HF_TOKEN
 
 @st.cache_resource
 def load_models():
     print("[INIT] Загрузка embedding модели...")
     t0 = time.time()
-    embed_model = SentenceTransformer(EMBED_MODEL_NAME)
+    embed_model = SentenceTransformer(
+        EMBED_MODEL_NAME,
+        token=HF_TOKEN)
     print(f"[INIT] Embedding модель загружена за {time.time() - t0:.2f} сек")
 
     print("[INIT] Подключение к Qdrant...")
