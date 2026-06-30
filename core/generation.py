@@ -1,11 +1,7 @@
 import time
-
-from core.generation_local import load_local_model
+import ollama
 
 from core.config import LLM_MODEL
-
-# Загружаем модель один раз (при импорте модуля)
-local_llm = load_local_model()
 
 def generate(query, context):
     print("[STEP 5] Отправка в LLM...")
@@ -146,11 +142,15 @@ def generate(query, context):
 {query}
 """
 
-    # Вызов локальной LLM (HuggingFacePipeline)
-    response = local_llm.invoke(prompt)
+    response = ollama.chat(
+        model=LLM_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        options={"temperature": 0.2}
+    )
 
     gen_time = time.time() - t0
 
     print(f"[STEP 5] Ответ от LLM получен за {gen_time:.3f} сек")
 
-    return response, gen_time
+    return response["message"]["content"], gen_time
+
