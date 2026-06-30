@@ -8,9 +8,9 @@ def build_context(results):
     sources = []
 
     for i, r in enumerate(results):
-        text = r.payload["text"]
-        source = r.payload["source"]
-        page = r.payload["page"]
+        text = r.payload.get("text")
+        source = r.payload.get("source")
+        page = r.payload.get("page")
 
         context += f"""
 Источник {i+1}
@@ -19,7 +19,9 @@ def build_context(results):
 {text}
 """
 
-        sources.append(f"{source} (стр. {page})")
+        # Кликабельная ссылка
+        pdf_url = f"/documents/{source}#page={page}"
+        sources.append(f"[{source} (стр. {page})]({pdf_url})")
 
     print(f"[STEP 4] Контекст собран за {time.time() - t0:.3f} сек")
 

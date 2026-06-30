@@ -42,7 +42,7 @@ if prompt := st.chat_input("Задайте вопрос..."):
 
             if sources:
                 full_answer += "\n\n**Источники:**\n"
-                for s in set(sources):
+                for s in sources:           
                     full_answer += f"- {s}\n"
 
             st.markdown(full_answer)
