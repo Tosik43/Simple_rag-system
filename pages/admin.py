@@ -169,9 +169,9 @@ with col2:
                         st.image(preview["data"])
                 else:
                     preview = preview_file(file, 0)
-                    st.text_area("Предпросмотр:", preview["data"], height=250, disabled=True)
+                    st.text(preview["data"])
 
-        if st.button("📤 Загрузить в базу", type="primary"):
+        if st.button("📤 Загрузить в базу"):
             progress = st.progress(0)
             status = st.empty()
 
