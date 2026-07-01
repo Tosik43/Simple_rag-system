@@ -45,9 +45,9 @@ if st.button("🚪 Выйти"):
 st.divider()
 
 # ====================== ПРЕВЬЮ ======================
-def preview_file(uploaded_file):
+def preview_file(uploaded_file, page_num=0):
     name = uploaded_file.name.lower()
-    preview = {"type": "text", "data": "Не удалось показать предпросмотр"}
+    preview = {"type": "text", "data": "Не удалось показать предпросмотр", "total_pages": 1}
 
     try:
         uploaded_file.seek(0)
@@ -55,36 +55,36 @@ def preview_file(uploaded_file):
 
         if name.endswith(".pdf"):
             doc = fitz.open(stream=contents, filetype="pdf")
+            total_pages = len(doc)
+            page_num = max(0, min(page_num, total_pages - 1))
             
-            if len(doc) > 0:
-                page = doc[0]
-                pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
-                img_bytes = pix.tobytes("png")
-                
-                preview = {
-                    "type": "image",
-                    "data": img_bytes,
-                    "total_pages": len(doc)
-                }
+            page = doc[page_num]
+            pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
+            img_bytes = pix.tobytes("png")
             
-            doc.close() 
+            doc.close()
+
+            preview = {
+                "type": "image",
+                "data": img_bytes,
+                "total_pages": total_pages,
+                "current_page": page_num + 1
+            }
 
         elif name.endswith(".docx"):
             with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
                 tmp.write(contents)
                 path = tmp.name
-
             doc = Document(path)
             text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
             os.remove(path)
-
-            preview = {"type": "text", "data": text[:1500] + ("..." if len(text) > 1500 else "")}
+            preview = {"type": "text", "data": text[:1500] + ("..." if len(text) > 1500 else ""), "total_pages": 1}
 
         elif name.endswith(".txt"):
             text = contents.decode("utf-8")
             words = text.split()[:100]
             preview_text = " ".join(words) + ("..." if len(words) == 100 else "")
-            preview = {"type": "text", "data": preview_text}
+            preview = {"type": "text", "data": preview_text, "total_pages": 1}
 
     except Exception as e:
         preview["data"] = f"Ошибка предпросмотра: {e}"
@@ -114,7 +114,7 @@ with col1:
                     if r.status_code == 200:
                         st.success(f"✅ Удален: {selected_doc}")
                         time.sleep(1.5)
-                        st.rerun()   
+                        st.rerun()
                     else:
                         st.error(f"Ошибка: {r.text}")
                 except Exception as e:
@@ -145,16 +145,31 @@ with col2:
 
         st.info(f"📂 Файлов к загрузке: {len(uploaded_files)}")
 
-        
+        # Превью
         for file in uploaded_files:
             with st.expander(f"📄 {file.name}"):
-                preview = preview_file(file)
-                
-                if preview["type"] == "image":
-                    st.image(preview["data"])
-                    st.caption(f"Страница 1 из {preview.get('total_pages', 1)}")
+                if file.name.lower().endswith(".pdf"):
+                    # Листание страниц
+                    key = f"pdf_page_{file.name}"
+                    if key not in st.session_state:
+                        st.session_state[key] = 0
+
+                    col_prev, col_info, col_next = st.columns([1, 3, 1])
+                    with col_prev:
+                        if st.button("←", key=f"prev_{file.name}"):
+                            st.session_state[key] = max(0, st.session_state[key] - 1)
+                    with col_info:
+                        st.write(f"Страница **{st.session_state[key] + 1}**")
+                    with col_next:
+                        if st.button("→", key=f"next_{file.name}"):
+                            st.session_state[key] += 1
+
+                    preview = preview_file(file, st.session_state[key])
+                    if preview["type"] == "image":
+                        st.image(preview["data"])
                 else:
-                    st.text(preview["data"])
+                    preview = preview_file(file, 0)
+                    st.text_area("Предпросмотр:", preview["data"], height=250, disabled=True)
 
         if st.button("📤 Загрузить в базу", type="primary"):
             progress = st.progress(0)
