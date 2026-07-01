@@ -1,57 +1,13 @@
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
-import torch
-from langchain_community.llms.huggingface_pipeline import HuggingFacePipeline
 import time
+import torch
 
-# Глобальный кэш модели
-llm = None
+from core.llm import model, tokenizer
 
-
-def load_local_model():
-    model_path = "models/qwen3-8b"
-    
-    print(f"Загрузка модели из {model_path}...")
-
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_path, 
-        trust_remote_code=True
-    )
-
-    model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        device_map="auto",           # автоматически использует GPU, если доступен
-        torch_dtype=torch.float16,   # рекомендуется для 8B модели
-        trust_remote_code=True,
-        load_in_8bit=True,           # экономит память
-        # load_in_4bit=True,         # можно попробовать, если мало VRAM
-    )
-
-    pipe = pipeline(
-        "text-generation",
-        model=model,
-        tokenizer=tokenizer,
-        max_new_tokens=1024,
-        temperature=0.2,
-        top_p=0.9,
-        repetition_penalty=1.1,
-        do_sample=True,
-    )
-
-    llm_instance = HuggingFacePipeline(pipeline=pipe)
-    print("✅ Локальная модель Qwen3-8B успешно загружена!")
-    return llm_instance
-
-
-def get_llm():
-    """Возвращает модель (загружает только один раз)"""
-    global llm
-    if llm is None:
-        llm = load_local_model()
-    return llm
+DEVICE = "cpu"
 
 
 def generate(query, context):
-    print("[STEP 5] Отправка в локальную LLM (Qwen3-8B)...")
+    print("[STEP 5] Отправка в LLM...")
     t0 = time.time()
 
     prompt = f"""
@@ -116,21 +72,29 @@ def generate(query, context):
 ## КЛЮЧЕВОЕ ПРАВИЛО: ФОРМАТ ОТВЕТА
 
 **Если вопрос допускает ответ «да» или «нет»:**
-- Начни ответ с «Да» или «Нет» (без кавычек).
-- Затем добавь краткое пояснение, если необходимо.
+- Начни ответ с «Да» или «Нет».
+- Затем добавь краткое пояснение.
 
 **Если вопрос НЕ допускает ответа «да»/«нет»:**
-- Запрещено начинать ответ с «Да» или «Нет».
-- Ответ должен быть содержательным: описание, перечисление, объяснение.
+- Не начинай ответ с «Да» или «Нет».
+- Дай содержательный ответ.
 
 ---
 
-## СТИЛЬ ОТВЕТА
+## Работа с вопросом, содержащим сравнение
 
-- Чётко, профессионально, без воды.
-- Короткие абзацы или списки при необходимости.
-- Без повторов.
-- Без вводных фраз, ссылок на контекст и заголовка «Ответ:».
+- Если формат совпадает полностью — ответь «Да».
+- Если совпадает частично — ответь «Частично».
+- Если не совпадает — ответь «Нет».
+
+---
+
+## Работа с неполной информацией
+
+- Если информации достаточно для вывода — сделай вывод.
+- Если есть только часть информации — ответь в её пределах.
+- Если информации нет — напиши:
+  «Нет информации по этому вопросу.»
 
 ---
 
@@ -145,13 +109,45 @@ def generate(query, context):
 {query}
 """
 
-    local_llm = get_llm()
-    
-    # Генерация ответа
-    response = local_llm.invoke(prompt)
+    messages = [
+        {
+            "role": "user",
+            "content": prompt,
+        }
+    ]
+
+    text = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+
+    inputs = tokenizer(
+        text,
+        return_tensors="pt",
+    )
+
+    # Перемещаем входные данные на CPU
+    inputs = {k: v.to(DEVICE) for k, v in inputs.items()}
+
+    with torch.inference_mode():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=512,
+            do_sample=False,
+            pad_token_id=tokenizer.eos_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+        )
+
+    generated_tokens = outputs[0][inputs["input_ids"].shape[1]:]
+
+    answer = tokenizer.decode(
+        generated_tokens,
+        skip_special_tokens=True,
+    ).strip()
 
     gen_time = time.time() - t0
 
     print(f"[STEP 5] Ответ от LLM получен за {gen_time:.3f} сек")
 
-    return response, gen_time
+    return answer, gen_time
