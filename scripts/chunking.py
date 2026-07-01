@@ -66,8 +66,6 @@ def clean_chunk_text(text: str) -> str:
 
     text = re.sub(r'[‘’“”]', '', text)
 
-    text = re.sub(r'\b\d+\b', '', text)
-
     text = re.sub(r'[-–—]{2,}', '-', text)
 
     text = re.sub(r'\s+', ' ', text)
@@ -76,36 +74,41 @@ def clean_chunk_text(text: str) -> str:
 
 
 
-def is_valid_chunk(text: str) -> bool:
+def is_valid_chunk(text: str) -> tuple[bool, str]:
+    """
+    Проверяет пригодность чанка для индексации.
+    Возвращает:
+        (True, "")
+        (False, причина)
+    """
 
-    if len(text) < 200:
-        return False
+    text = text.strip()
+
+    if len(text) < 80:
+        return False, "слишком короткий"
 
     words = text.split()
 
-    if len(words) < 20:
-        return False
+    if len(words) < 10:
+        return False, "мало слов"
 
-    if russian_ratio(text) < 0.6:
-        return False
-
-    if russian_word_ratio(text) < 0.55:
-        return False
+    if russian_ratio(text) < 0.3:
+        return False, "слишком мало русского текста"
 
     letters = sum(c.isalpha() for c in text)
 
-    if letters / len(text) < 0.7:
-        return False
+    if letters == 0:
+        return False, "нет букв"
 
     bad_chars = sum(
-        not c.isalnum() and c not in " .,!?()-–:;%№«»\"'"
+        not c.isalnum() and c not in " .,!?()-–:;%№«»\"'\n"
         for c in text
     )
 
-    if bad_chars / len(text) > 0.15:
-        return False
+    if bad_chars / len(text) > 0.3:
+        return False, "слишком много спецсимволов"
 
-    return True
+    return True, ""
 
 
 
@@ -114,6 +117,9 @@ def chunk_text(
     chunk_size: int = 1200,
     overlap_sentences: int = 2
 ) -> List[str]:
+
+    text = re.sub(r"\n{2,}", ". ", text)
+    text = re.sub(r"\s+", " ", text).strip()
 
     sentences = split_into_sentences(text)
 
@@ -162,20 +168,28 @@ def chunk_pages(pages: List[Dict]) -> List[Dict]:
 
             chunk = clean_chunk_text(chunk)
 
-            if not is_valid_chunk(chunk):
+            valid, reason = is_valid_chunk(chunk)
+
+            if not valid:
                 skipped += 1
+
+                print(
+                    f"[SKIP] {page['source']} "
+                    f"page={page['page']} "
+                    f"chunk={i} "
+                    f"reason={reason}"
+                )
+
                 continue
 
-            chunk_data = {
+            all_chunks.append({
                 "text": chunk,
                 "page": page["page"],
                 "source": page["source"],
-                "chunk_id": f'{page["source"]}_page{page["page"]}_chunk{i}'
-            }
+                "chunk_id": f"{page['source']}_page{page['page']}_chunk{i}"
+            })
 
-            all_chunks.append(chunk_data)
-
-    print(f"Создано chunks: {len(all_chunks)}")
+    print(f"\nСоздано chunks: {len(all_chunks)}")
     print(f"Пропущено chunks: {skipped}")
 
     return all_chunks
