@@ -1,10 +1,13 @@
 import streamlit as st
 import requests
 import time
+import tempfile
+import os
 from datetime import datetime
+import fitz
+from docx import Document
 
 from core.config import ADMIN_PASSWORD, MAX_FILES, MAX_FILE_SIZE_MB
-
 
 API_URL = "http://127.0.0.1:8000"
 
@@ -16,7 +19,6 @@ if "auth" not in st.session_state:
 
 if not st.session_state.auth:
     col1, col2, col3 = st.columns([1, 2, 1])
-
     with col2:
         logo_col1, logo_col2, logo_col3 = st.columns([1, 2, 1])
         with logo_col2: 
@@ -31,7 +33,6 @@ if not st.session_state.auth:
                 st.rerun()
             else:
                 st.error("Неверный пароль")
-
     st.stop()
 
 # ================= UI =================
@@ -43,52 +44,85 @@ if st.button("🚪 Выйти"):
 
 st.divider()
 
-# ================= FUNCTIONS =================
-def format_date(dt_str):
+# ====================== ПРЕВЬЮ ======================
+def preview_file(uploaded_file):
+    name = uploaded_file.name.lower()
+    preview = {"type": "text", "data": "Не удалось показать предпросмотр"}
+
     try:
-        dt = datetime.fromisoformat(dt_str)
-        return dt.strftime("%d.%m.%Y %H:%M")
-    except:
-        return "—"
+        uploaded_file.seek(0)
+        contents = uploaded_file.read()
+
+        if name.endswith(".pdf"):
+            doc = fitz.open(stream=contents, filetype="pdf")
+            
+            if len(doc) > 0:
+                page = doc[0]
+                pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
+                img_bytes = pix.tobytes("png")
+                
+                preview = {
+                    "type": "image",
+                    "data": img_bytes,
+                    "total_pages": len(doc)
+                }
+            
+            doc.close() 
+
+        elif name.endswith(".docx"):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
+                tmp.write(contents)
+                path = tmp.name
+
+            doc = Document(path)
+            text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+            os.remove(path)
+
+            preview = {"type": "text", "data": text[:1500] + ("..." if len(text) > 1500 else "")}
+
+        elif name.endswith(".txt"):
+            text = contents.decode("utf-8")
+            words = text.split()[:100]
+            preview_text = " ".join(words) + ("..." if len(words) == 100 else "")
+            preview = {"type": "text", "data": preview_text}
+
+    except Exception as e:
+        preview["data"] = f"Ошибка предпросмотра: {e}"
+
+    uploaded_file.seek(0)
+    return preview
 
 
 # ================= DOCUMENTS =================
 st.subheader("📂 Управление документами")
 
-# Получаем список документов через API
-try:
-    docs_response = requests.get(f"{API_URL}/documents")
-    docs = docs_response.json() if docs_response.status_code == 200 else []
-except:
-    docs = []
-    st.error("Не удалось подключиться к FastAPI")
-
-st.caption(f"📊 В базе документов: {len(docs)}")
-
 col1, col2 = st.columns(2)
 
 # DELETE
 with col1:
-    if docs:
-        selected_doc = st.selectbox(
-            "Документы",
-            docs,
-            format_func=lambda x: f"{x}"
-        )
-
-        if st.button("🗑 Удалить документ"):
-            try:
-                r = requests.delete(f"{API_URL}/documents/{selected_doc}")
-                if r.status_code == 200:
-                    st.success(f"Удален: {selected_doc}")
-                    time.sleep(1)
-                    st.rerun()
-                else:
-                    st.error(f"Ошибка удаления: {r.text}")
-            except Exception as e:
-                st.error(f"Ошибка соединения: {e}")
-    else:
-        st.warning("Нет документов")
+    try:
+        docs_response = requests.get(f"{API_URL}/documents")
+        docs = docs_response.json() if docs_response.status_code == 200 else []
+        st.caption(f"📊 Документов в системе: {len(docs)}")
+        
+        if docs:
+            selected_doc = st.selectbox("Документы", docs)
+            
+            if st.button("Удалить документ", type="primary"):
+                try:
+                    r = requests.delete(f"{API_URL}/documents/{selected_doc}")
+                    if r.status_code == 200:
+                        st.success(f"✅ Удален: {selected_doc}")
+                        time.sleep(1.5)
+                        st.rerun()   
+                    else:
+                        st.error(f"Ошибка: {r.text}")
+                except Exception as e:
+                    st.error(f"Ошибка соединения: {e}")
+        else:
+            st.warning("Нет документов")
+    except:
+        st.error("Не удалось подключиться к FastAPI")
 
 # ================= UPLOAD =================
 with col2:
@@ -104,7 +138,6 @@ with col2:
             st.error(f"Максимум {MAX_FILES} файлов за раз")
             st.stop()
 
-        # Проверка размера
         for f in uploaded_files:
             if f.size > MAX_FILE_SIZE_MB * 1024 * 1024:
                 st.error(f"{f.name} превышает {MAX_FILE_SIZE_MB} MB")
@@ -112,38 +145,38 @@ with col2:
 
         st.info(f"📂 Файлов к загрузке: {len(uploaded_files)}")
 
-        # Предпросмотр оставляем как был
+        
         for file in uploaded_files:
             with st.expander(f"📄 {file.name}"):
-                # Можно оставить preview_file, если хочешь
-                st.info(f"Размер: {round(file.size/1024, 1)} KB")
+                preview = preview_file(file)
+                
+                if preview["type"] == "image":
+                    st.image(preview["data"])
+                    st.caption(f"Страница 1 из {preview.get('total_pages', 1)}")
+                else:
+                    st.text(preview["data"])
 
-        if st.button("📤 Загрузить в базу"):
+        if st.button("📤 Загрузить в базу", type="primary"):
+            progress = st.progress(0)
+            status = st.empty()
 
-            try:
-                progress = st.progress(0)
-                status = st.empty()
+            for i, file in enumerate(uploaded_files):
+                status.write(f"Загрузка: {file.name} ({i+1}/{len(uploaded_files)})")
+                
+                try:
+                    files_data = {"file": (file.name, file.getvalue(), file.type)}
+                    response = requests.post(f"{API_URL}/upload", files=files_data)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        st.success(f"✅ {file.name} — {data.get('chunks_count', 0)} чанков")
+                    else:
+                        st.error(f"❌ {file.name}: {response.text}")
+                except Exception as e:
+                    st.error(f"Ошибка загрузки {file.name}: {e}")
+                
+                progress.progress((i + 1) / len(uploaded_files))
 
-                for i, file in enumerate(uploaded_files):
-                    status.write(f"Загрузка: {file.name} ({i+1}/{len(uploaded_files)})")
-
-                    try:
-                        files_data = {"file": (file.name, file.getvalue(), file.type)}
-                        response = requests.post(f"{API_URL}/upload", files=files_data)
-                        
-                        if response.status_code == 200:
-                            data = response.json()
-                            st.success(f"✅ {file.name} — {data.get('chunks_count', 0)} чанков")
-                        else:
-                            st.error(f"❌ {file.name}: {response.text}")
-                    except Exception as e:
-                        st.error(f"Ошибка загрузки {file.name}: {e}")
-
-                    progress.progress((i + 1) / len(uploaded_files))
-
-                st.success("✅ Документы успешно загружены!")
-                time.sleep(2)
-                st.rerun()
-
-            except Exception as e:
-                st.error(f"❌ Ошибка загрузки: {e}")
+            st.success("✅ Документы успешно загружены!")
+            time.sleep(2)
+            st.rerun()
